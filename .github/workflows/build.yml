@@ -50,8 +50,16 @@ jobs:
       - name: Mostrar error si falló
         if: steps.compilar.outcome == 'failure'
         run: |
-          echo "===== ÚLTIMAS 150 LÍNEAS DEL LOG ====="
-          tail -n 150 build.log
+          echo "===== CONTEXTO ANTES DE 'gradlew failed' ====="
+          linea=$(grep -n "gradlew failed" build.log | tail -1 | cut -d: -f1)
+          if [ -z "$linea" ]; then
+            echo "No se encontró 'gradlew failed', mostrando últimas 200 líneas:"
+            tail -n 200 build.log
+          else
+            inicio=$((linea - 150))
+            if [ $inicio -lt 1 ]; then inicio=1; fi
+            sed -n "${inicio},${linea}p" build.log
+          fi
           exit 1
 
       - name: Subir el APK generado
