@@ -1,18 +1,13 @@
 """
-Juego de Damas (Checkers) en Python con Kivy - listo para compilar a APK
---------------------------------------------------------------------------
-Misma lógica de juego que la versión de Tkinter, pero con Kivy para que
-pueda compilarse a Android usando Buildozer.
+Juego de Damas 8x10 en Python con Kivy
+---------------------------------------
+8 columnas x 10 filas.
 
-Requisitos para probarlo en PC (antes de compilar):
-    pip install kivy
+Rojo  = Jugador
+Negro = IA
 
-Para compilar a APK necesitas Linux (o WSL) con Buildozer instalado:
-    pip install buildozer cython
-    buildozer init          # genera buildozer.spec (o usa el incluido)
-    buildozer -v android debug
-
-El .apk queda en la carpeta bin/ al terminar.
+Casillas jugables  = café
+Casillas no jugables = blanco apagado
 """
 
 import copy
@@ -29,392 +24,1349 @@ from kivy.uix.popup import Popup
 from kivy.graphics import Color, Rectangle, Ellipse, Line
 from kivy.clock import Clock
 
-TAM = 8
 
-# ---------------------------------------------------------------------
-# Lógica del juego (idéntica a la versión de escritorio)
-# ---------------------------------------------------------------------
+# ============================================================
+# CONFIGURACIÓN DEL TABLERO
+# ============================================================
+
+COLUMNAS = 8
+FILAS = 10
+
+
+# ============================================================
+# COLORES
+# ============================================================
+
+COLOR_CAFE = (0.45, 0.29, 0.16, 1)
+COLOR_BLANCO_APAGADO = (0.86, 0.85, 0.81, 1)
+
+COLOR_ROJA = (0.78, 0.10, 0.08, 1)
+COLOR_NEGRA = (0.08, 0.08, 0.08, 1)
+
+COLOR_SELECCION = (0.95, 0.75, 0.05, 1)
+COLOR_MOVIMIENTO = (0.15, 0.75, 0.35, 1)
+
+COLOR_BORDE = (0.12, 0.12, 0.12, 1)
+
+
+# ============================================================
+# LÓGICA DEL JUEGO
+# ============================================================
 
 def tablero_inicial():
-    tab = [['.' for _ in range(TAM)] for _ in range(TAM)]
-    for fila in range(3):
-        for col in range(TAM):
+
+    tab = [
+        ['.' for _ in range(COLUMNAS)]
+        for _ in range(FILAS)
+    ]
+
+    # 4 filas superiores para la IA
+    for fila in range(4):
+        for col in range(COLUMNAS):
             if (fila + col) % 2 == 1:
                 tab[fila][col] = 'n'
-    for fila in range(5, 8):
-        for col in range(TAM):
+
+    # 4 filas inferiores para el jugador
+    for fila in range(FILAS - 4, FILAS):
+        for col in range(COLUMNAS):
             if (fila + col) % 2 == 1:
                 tab[fila][col] = 'r'
+
     return tab
 
 
 def es_pieza_de(pieza, jugador):
+
     if jugador == 'r':
         return pieza in ('r', 'R')
+
     return pieza in ('n', 'N')
 
 
 def es_dama(pieza):
+
     return pieza in ('R', 'N')
 
 
 def oponente(jugador):
-    return 'n' if jugador == 'r' else 'r'
+
+    if jugador == 'r':
+        return 'n'
+
+    return 'r'
 
 
 def dentro(fila, col):
-    return 0 <= fila < TAM and 0 <= col < TAM
+
+    return (
+        0 <= fila < FILAS
+        and
+        0 <= col < COLUMNAS
+    )
 
 
 def direcciones_pieza(pieza):
-    if pieza == 'r':
-        return [(-1, -1), (-1, 1)]
-    if pieza == 'n':
-        return [(1, -1), (1, 1)]
-    return [(-1, -1), (-1, 1), (1, -1), (1, 1)]
 
+    # Rojo sube
+    if pieza == 'r':
+        return [
+            (-1, -1),
+            (-1, 1)
+        ]
+
+    # Negro baja
+    if pieza == 'n':
+        return [
+            (1, -1),
+            (1, 1)
+        ]
+
+    # Damas pueden ir en las cuatro direcciones
+    return [
+        (-1, -1),
+        (-1, 1),
+        (1, -1),
+        (1, 1)
+    ]
+
+
+# ============================================================
+# GENERAR MOVIMIENTOS
+# ============================================================
 
 def generar_movimientos(tab, jugador):
+
     capturas = []
     simples = []
-    for fila in range(TAM):
-        for col in range(TAM):
+
+    for fila in range(FILAS):
+
+        for col in range(COLUMNAS):
+
             pieza = tab[fila][col]
-            if pieza == '.' or not es_pieza_de(pieza, jugador):
+
+            if pieza == '.':
                 continue
-            capturas += _buscar_capturas(tab, fila, col, pieza, jugador)
+
+            if not es_pieza_de(pieza, jugador):
+                continue
+
+            # Buscar capturas
+            capturas += _buscar_capturas(
+                tab,
+                fila,
+                col,
+                pieza,
+                jugador
+            )
+
+            # Buscar movimientos normales
             for df, dc in direcciones_pieza(pieza):
-                nf, nc = fila + df, col + dc
-                if dentro(nf, nc) and tab[nf][nc] == '.':
-                    simples.append((fila, col, nf, nc, False, []))
+
+                nf = fila + df
+                nc = col + dc
+
+                if dentro(nf, nc):
+
+                    if tab[nf][nc] == '.':
+
+                        simples.append(
+                            (
+                                fila,
+                                col,
+                                nf,
+                                nc,
+                                False,
+                                []
+                            )
+                        )
+
+    # En damas, si existe una captura,
+    # las capturas tienen prioridad.
     if capturas:
         return capturas
+
     return simples
 
 
-def _buscar_capturas(tab, fila, col, pieza, jugador, capturadas_previas=None, camino_previo=None):
+def _buscar_capturas(
+    tab,
+    fila,
+    col,
+    pieza,
+    jugador,
+    capturadas_previas=None,
+    camino_previo=None
+):
+
     if capturadas_previas is None:
         capturadas_previas = []
+
     if camino_previo is None:
         camino_previo = (fila, col)
 
     resultados = []
+
     rival = oponente(jugador)
 
     for df, dc in direcciones_pieza(pieza):
-        mf, mc = fila + df, col + dc
-        df2, dc2 = fila + 2 * df, col + 2 * dc
 
-        if not dentro(df2, dc2):
+        mf = fila + df
+        mc = col + dc
+
+        destino_fila = fila + (2 * df)
+        destino_col = col + (2 * dc)
+
+        if not dentro(mf, mc):
             continue
-        if tab[mf][mc] == '.' or not es_pieza_de(tab[mf][mc], rival):
+
+        if not dentro(destino_fila, destino_col):
             continue
-        if tab[df2][dc2] != '.':
+
+        pieza_en_medio = tab[mf][mc]
+
+        if pieza_en_medio == '.':
             continue
+
+        if not es_pieza_de(pieza_en_medio, rival):
+            continue
+
+        if tab[destino_fila][destino_col] != '.':
+            continue
+
         if (mf, mc) in capturadas_previas:
             continue
 
         tab_temp = copy.deepcopy(tab)
+
         tab_temp[fila][col] = '.'
         tab_temp[mf][mc] = '.'
-        pieza_final = pieza
-        if pieza == 'r' and df2 == 0:
-            pieza_final = 'R'
-        elif pieza == 'n' and df2 == TAM - 1:
-            pieza_final = 'N'
-        tab_temp[df2][dc2] = pieza_final
 
-        nueva_lista = capturadas_previas + [(mf, mc)]
-        siguientes = _buscar_capturas(tab_temp, df2, dc2, pieza_final, jugador, nueva_lista, camino_previo)
+        pieza_final = pieza
+
+        # Promoción roja
+        if pieza == 'r' and destino_fila == 0:
+            pieza_final = 'R'
+
+        # Promoción negra
+        elif pieza == 'n' and destino_fila == FILAS - 1:
+            pieza_final = 'N'
+
+        tab_temp[destino_fila][destino_col] = pieza_final
+
+        nueva_lista = capturadas_previas + [
+            (mf, mc)
+        ]
+
+        siguientes = _buscar_capturas(
+            tab_temp,
+            destino_fila,
+            destino_col,
+            pieza_final,
+            jugador,
+            nueva_lista,
+            camino_previo
+        )
 
         if siguientes:
+
             resultados += siguientes
+
         else:
-            resultados.append((camino_previo[0], camino_previo[1], df2, dc2, True, nueva_lista))
+
+            resultados.append(
+                (
+                    camino_previo[0],
+                    camino_previo[1],
+                    destino_fila,
+                    destino_col,
+                    True,
+                    nueva_lista
+                )
+            )
 
     return resultados
 
 
+# ============================================================
+# APLICAR MOVIMIENTO
+# ============================================================
+
 def aplicar_movimiento(tab, mov):
-    fo, co, fd, cd, es_captura, capturadas = mov
+
+    fila_origen = mov[0]
+    col_origen = mov[1]
+
+    fila_destino = mov[2]
+    col_destino = mov[3]
+
+    capturadas = mov[5]
+
     nuevo = copy.deepcopy(tab)
-    pieza = nuevo[fo][co]
-    nuevo[fo][co] = '.'
-    for (cf, cc) in capturadas:
+
+    pieza = nuevo[fila_origen][col_origen]
+
+    nuevo[fila_origen][col_origen] = '.'
+
+    # Eliminar piezas capturadas
+    for cf, cc in capturadas:
         nuevo[cf][cc] = '.'
-    if pieza == 'r' and fd == 0:
+
+    # Promoción
+    if pieza == 'r' and fila_destino == 0:
         pieza = 'R'
-    elif pieza == 'n' and fd == TAM - 1:
+
+    elif pieza == 'n' and fila_destino == FILAS - 1:
         pieza = 'N'
-    nuevo[fd][cd] = pieza
+
+    nuevo[fila_destino][col_destino] = pieza
+
     return nuevo
 
 
-def contar_piezas(tab):
-    r = sum(fila.count('r') + fila.count('R') for fila in tab)
-    n = sum(fila.count('n') + fila.count('N') for fila in tab)
-    return r, n
+# ============================================================
+# CONTAR PIEZAS
+# ============================================================
 
+def contar_piezas(tab):
+
+    rojas = 0
+    negras = 0
+
+    for fila in tab:
+
+        for pieza in fila:
+
+            if pieza in ('r', 'R'):
+                rojas += 1
+
+            elif pieza in ('n', 'N'):
+                negras += 1
+
+    return rojas, negras
+
+
+# ============================================================
+# EVALUACIÓN DE LA IA
+# ============================================================
 
 def evaluar(tab, jugador_ia):
+
     valor = 0
-    for fila in range(TAM):
-        for col in range(TAM):
+
+    for fila in range(FILAS):
+
+        for col in range(COLUMNAS):
+
             pieza = tab[fila][col]
+
             if pieza == '.':
                 continue
-            base = 1.7 if es_dama(pieza) else 1
-            signo = 1 if es_pieza_de(pieza, jugador_ia) else -1
-            centro = 0.05 * (3.5 - abs(3.5 - col)) * (3.5 - abs(3.5 - fila)) / 3.5
-            valor += signo * (base + centro)
-    r, n = contar_piezas(tab)
-    if jugador_ia == 'r' and n == 0:
-        valor += 1000
-    if jugador_ia == 'n' and r == 0:
-        valor += 1000
-    if jugador_ia == 'r' and r == 0:
-        valor -= 1000
-    if jugador_ia == 'n' and n == 0:
-        valor -= 1000
+
+            if es_dama(pieza):
+                base = 1.7
+            else:
+                base = 1.0
+
+            if es_pieza_de(pieza, jugador_ia):
+                signo = 1
+            else:
+                signo = -1
+
+            centro_col = (
+                3.5 - abs(3.5 - col)
+            )
+
+            centro_fila = (
+                (FILAS - 1) / 2
+                - abs(((FILAS - 1) / 2) - fila)
+            )
+
+            centro = (
+                0.05
+                * centro_col
+                * centro_fila
+                / 4
+            )
+
+            valor += signo * (
+                base + centro
+            )
+
+    rojas, negras = contar_piezas(tab)
+
+    if jugador_ia == 'r':
+
+        if negras == 0:
+            valor += 1000
+
+        if rojas == 0:
+            valor -= 1000
+
+    else:
+
+        if rojas == 0:
+            valor += 1000
+
+        if negras == 0:
+            valor -= 1000
+
     return valor
 
 
-def minimax(tab, profundidad, alfa, beta, maximizando, jugador_ia, jugador_actual):
-    movimientos = generar_movimientos(tab, jugador_actual)
+# ============================================================
+# MINIMAX
+# ============================================================
+
+def minimax(
+    tab,
+    profundidad,
+    alfa,
+    beta,
+    maximizando,
+    jugador_ia,
+    jugador_actual
+):
+
+    movimientos = generar_movimientos(
+        tab,
+        jugador_actual
+    )
+
     if profundidad == 0 or not movimientos:
-        return evaluar(tab, jugador_ia), None
+
+        return (
+            evaluar(tab, jugador_ia),
+            None
+        )
 
     mejor_mov = None
+
     if maximizando:
+
         mejor_valor = -math.inf
+
         for mov in movimientos:
-            nuevo_tab = aplicar_movimiento(tab, mov)
-            valor, _ = minimax(nuevo_tab, profundidad - 1, alfa, beta, False,
-                                jugador_ia, oponente(jugador_actual))
+
+            nuevo_tab = aplicar_movimiento(
+                tab,
+                mov
+            )
+
+            valor, _ = minimax(
+                nuevo_tab,
+                profundidad - 1,
+                alfa,
+                beta,
+                False,
+                jugador_ia,
+                oponente(jugador_actual)
+            )
+
             if valor > mejor_valor:
+
                 mejor_valor = valor
                 mejor_mov = mov
-            alfa = max(alfa, mejor_valor)
+
+            alfa = max(
+                alfa,
+                mejor_valor
+            )
+
             if beta <= alfa:
                 break
-        return mejor_valor, mejor_mov
+
+        return (
+            mejor_valor,
+            mejor_mov
+        )
+
     else:
+
         mejor_valor = math.inf
+
         for mov in movimientos:
-            nuevo_tab = aplicar_movimiento(tab, mov)
-            valor, _ = minimax(nuevo_tab, profundidad - 1, alfa, beta, True,
-                                jugador_ia, oponente(jugador_actual))
+
+            nuevo_tab = aplicar_movimiento(
+                tab,
+                mov
+            )
+
+            valor, _ = minimax(
+                nuevo_tab,
+                profundidad - 1,
+                alfa,
+                beta,
+                True,
+                jugador_ia,
+                oponente(jugador_actual)
+            )
+
             if valor < mejor_valor:
+
                 mejor_valor = valor
                 mejor_mov = mov
-            beta = min(beta, mejor_valor)
+
+            beta = min(
+                beta,
+                mejor_valor
+            )
+
             if beta <= alfa:
                 break
-        return mejor_valor, mejor_mov
+
+        return (
+            mejor_valor,
+            mejor_mov
+        )
 
 
-def mejor_movimiento_ia(tab, jugador_ia, profundidad=5):
-    _, mov = minimax(tab, profundidad, -math.inf, math.inf, True, jugador_ia, jugador_ia)
+def mejor_movimiento_ia(
+    tab,
+    jugador_ia,
+    profundidad=5
+):
+
+    _, mov = minimax(
+        tab,
+        profundidad,
+        -math.inf,
+        math.inf,
+        True,
+        jugador_ia,
+        jugador_ia
+    )
+
     if mov is None:
-        movimientos = generar_movimientos(tab, jugador_ia)
-        mov = random.choice(movimientos) if movimientos else None
+
+        movimientos = generar_movimientos(
+            tab,
+            jugador_ia
+        )
+
+        if movimientos:
+            mov = random.choice(
+                movimientos
+            )
+
     return mov
 
 
+# ============================================================
+# DIFICULTADES
+# ============================================================
+
 DIFICULTADES = {
-    "Fácil": (2, 0.35),
-    "Medio": (4, 0.10),
-    "Difícil": (6, 0.0),
+
+    "Fácil": (
+        2,
+        0.35
+    ),
+
+    "Medio": (
+        4,
+        0.10
+    ),
+
+    "Difícil": (
+        6,
+        0.0
+    )
 }
 
 
-def elegir_movimiento_ia(tab, jugador_ia, profundidad, prob_azar):
-    movimientos = generar_movimientos(tab, jugador_ia)
+def elegir_movimiento_ia(
+    tab,
+    jugador_ia,
+    profundidad,
+    prob_azar
+):
+
+    movimientos = generar_movimientos(
+        tab,
+        jugador_ia
+    )
+
     if not movimientos:
         return None
-    if prob_azar > 0 and random.random() < prob_azar:
-        return random.choice(movimientos)
-    return mejor_movimiento_ia(tab, jugador_ia, profundidad)
+
+    if (
+        prob_azar > 0
+        and random.random() < prob_azar
+    ):
+
+        return random.choice(
+            movimientos
+        )
+
+    return mejor_movimiento_ia(
+        tab,
+        jugador_ia,
+        profundidad
+    )
 
 
-# ---------------------------------------------------------------------
-# Interfaz gráfica con Kivy
-# ---------------------------------------------------------------------
-
-COLOR_CLARA = (0.91, 0.84, 0.72, 1)
-COLOR_OSCURA = (0.42, 0.27, 0.14, 1)
-COLOR_ROJA = (0.75, 0.22, 0.17, 1)
-COLOR_NEGRA = (0.17, 0.17, 0.17, 1)
-COLOR_SEL = (0.95, 0.77, 0.06, 1)
-COLOR_HINT = (0.18, 0.8, 0.44, 1)
-
+# ============================================================
+# TABLERO KIVY
+# ============================================================
 
 class TableroWidget(GridLayout):
-    def __init__(self, app, **kwargs):
-        super().__init__(cols=TAM, rows=TAM, **kwargs)
+
+    def __init__(
+        self,
+        app,
+        **kwargs
+    ):
+
+        super().__init__(
+            cols=COLUMNAS,
+            rows=FILAS,
+            spacing=0,
+            padding=0,
+            **kwargs
+        )
+
         self.app = app
+
         self.casillas = []
-        for fila in range(TAM):
+
+        for fila in range(FILAS):
+
             fila_widgets = []
-            for col in range(TAM):
-                casilla = Button(background_normal='', background_down='', border=(0, 0, 0, 0))
-                casilla.bind(on_release=lambda inst, f=fila, c=col: self.app.al_hacer_clic(f, c))
+
+            for col in range(COLUMNAS):
+
+                casilla = Button(
+                    text='',
+                    background_normal='',
+                    background_down='',
+                    border=(0, 0, 0, 0)
+                )
+
+                casilla.bind(
+                    on_release=lambda inst,
+                    f=fila,
+                    c=col:
+                    self.app.al_hacer_clic(
+                        f,
+                        c
+                    )
+                )
+
                 self.add_widget(casilla)
-                fila_widgets.append(casilla)
-            self.casillas.append(fila_widgets)
 
-    def dibujar(self, tablero, seleccion, movimientos_validos):
-        for fila in range(TAM):
-            for col in range(TAM):
+                fila_widgets.append(
+                    casilla
+                )
+
+            self.casillas.append(
+                fila_widgets
+            )
+
+    def dibujar(
+        self,
+        tablero,
+        seleccion,
+        movimientos_validos
+    ):
+
+        for fila in range(FILAS):
+
+            for col in range(COLUMNAS):
+
                 casilla = self.casillas[fila][col]
+
                 casilla.canvas.before.clear()
-                color_fondo = COLOR_CLARA if (fila + col) % 2 == 0 else COLOR_OSCURA
+
+                # ------------------------------------------------
+                # COLOR DEL CUADRO
+                # ------------------------------------------------
+
+                if (fila + col) % 2 == 0:
+
+                    color_fondo = (
+                        COLOR_BLANCO_APAGADO
+                    )
+
+                else:
+
+                    color_fondo = COLOR_CAFE
+
                 with casilla.canvas.before:
-                    Color(*color_fondo)
-                    Rectangle(pos=casilla.pos, size=casilla.size)
 
-                    if seleccion == (fila, col):
-                        Color(*COLOR_SEL)
-                        Line(rectangle=(casilla.x + 2, casilla.y + 2,
-                                        casilla.width - 4, casilla.height - 4), width=2)
+                    Color(
+                        *color_fondo
+                    )
 
-                    es_hint = seleccion and any(
-                        m[0] == seleccion[0] and m[1] == seleccion[1] and m[2] == fila and m[3] == col
-                        for m in movimientos_validos)
+                    Rectangle(
+                        pos=casilla.pos,
+                        size=casilla.size
+                    )
+
+                    # --------------------------------------------
+                    # SELECCIÓN
+                    # --------------------------------------------
+
+                    if seleccion == (
+                        fila,
+                        col
+                    ):
+
+                        Color(
+                            *COLOR_SELECCION
+                        )
+
+                        Line(
+                            rectangle=(
+                                casilla.x + 3,
+                                casilla.y + 3,
+                                casilla.width - 6,
+                                casilla.height - 6
+                            ),
+                            width=3
+                        )
+
+                    # --------------------------------------------
+                    # MOVIMIENTO POSIBLE
+                    # --------------------------------------------
+
+                    es_hint = False
+
+                    if seleccion is not None:
+
+                        for mov in movimientos_validos:
+
+                            if (
+                                mov[0] == seleccion[0]
+                                and
+                                mov[1] == seleccion[1]
+                                and
+                                mov[2] == fila
+                                and
+                                mov[3] == col
+                            ):
+
+                                es_hint = True
+                                break
+
                     if es_hint:
-                        Color(*COLOR_HINT)
-                        Line(circle=(casilla.center_x, casilla.center_y, casilla.width / 2 - 14), width=3)
+
+                        Color(
+                            *COLOR_MOVIMIENTO
+                        )
+
+                        Line(
+                            circle=(
+                                casilla.center_x,
+                                casilla.center_y,
+                                min(
+                                    casilla.width,
+                                    casilla.height
+                                ) / 2 - 10
+                            ),
+                            width=3
+                        )
+
+                    # --------------------------------------------
+                    # PIEZAS
+                    # --------------------------------------------
 
                     pieza = tablero[fila][col]
-                    if pieza != '.':
-                        color_pieza = COLOR_ROJA if pieza in ('r', 'R') else COLOR_NEGRA
-                        Color(*color_pieza)
-                        pad = 10
-                        Ellipse(pos=(casilla.x + pad, casilla.y + pad),
-                                size=(casilla.width - 2 * pad, casilla.height - 2 * pad))
-                        if es_dama(pieza):
-                            Color(1, 1, 1, 1)
-                            Line(circle=(casilla.center_x, casilla.center_y, casilla.width / 4), width=2)
 
+                    if pieza != '.':
+
+                        if pieza in ('r', 'R'):
+
+                            color_pieza = COLOR_ROJA
+
+                        else:
+
+                            color_pieza = COLOR_NEGRA
+
+                        Color(
+                            *color_pieza
+                        )
+
+                        tam = min(
+                            casilla.width,
+                            casilla.height
+                        )
+
+                        pad = tam * 0.12
+
+                        Ellipse(
+                            pos=(
+                                casilla.center_x - tam / 2 + pad,
+                                casilla.center_y - tam / 2 + pad
+                            ),
+                            size=(
+                                tam - 2 * pad,
+                                tam - 2 * pad
+                            )
+                        )
+
+                        # ----------------------------------------
+                        # BORDE DE LA FICHA
+                        # ----------------------------------------
+
+                        Color(
+                            *COLOR_BORDE
+                        )
+
+                        Line(
+                            circle=(
+                                casilla.center_x,
+                                casilla.center_y,
+                                tam / 2 - pad
+                            ),
+                            width=1.5
+                        )
+
+                        # ----------------------------------------
+                        # MARCA DE DAMA
+                        # ----------------------------------------
+
+                        if es_dama(pieza):
+
+                            Color(
+                                1,
+                                0.82,
+                                0.15,
+                                1
+                            )
+
+                            Line(
+                                circle=(
+                                    casilla.center_x,
+                                    casilla.center_y,
+                                    tam / 4
+                                ),
+                                width=3
+                            )
+
+
+# ============================================================
+# APLICACIÓN
+# ============================================================
 
 class DamasApp(App):
+
     def build(self):
+
+        # --------------------------------------------
+        # CONFIGURACIÓN
+        # --------------------------------------------
+
         self.jugador_humano = 'r'
         self.jugador_ia = 'n'
+
         self.dificultad_actual = "Medio"
 
         self.tablero = tablero_inicial()
+
         self.turno = 'r'
+
         self.seleccion = None
-        self.movimientos_validos = generar_movimientos(self.tablero, self.turno)
 
-        raiz = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        self.movimientos_validos = generar_movimientos(
+            self.tablero,
+            self.turno
+        )
 
-        fila_superior = BoxLayout(size_hint_y=None, height=50, spacing=10)
-        fila_superior.add_widget(Label(text="Dificultad:"))
-        self.spinner = Spinner(text=self.dificultad_actual, values=list(DIFICULTADES.keys()))
-        self.spinner.bind(text=self.cambiar_dificultad)
-        fila_superior.add_widget(self.spinner)
-        raiz.add_widget(fila_superior)
+        # --------------------------------------------
+        # CONTENEDOR PRINCIPAL
+        # --------------------------------------------
 
-        self.status = Label(text="Tu turno (rojas)", size_hint_y=None, height=40)
-        raiz.add_widget(self.status)
+        raiz = BoxLayout(
+            orientation='vertical',
+            padding=8,
+            spacing=6
+        )
 
-        self.tablero_widget = TableroWidget(self)
-        raiz.add_widget(self.tablero_widget)
+        # --------------------------------------------
+        # TÍTULO
+        # --------------------------------------------
 
-        boton_reiniciar = Button(text="Reiniciar", size_hint_y=None, height=50)
-        boton_reiniciar.bind(on_release=lambda inst: self.reiniciar())
-        raiz.add_widget(boton_reiniciar)
+        titulo = Label(
+            text="DAMAS 8 × 10",
+            size_hint_y=None,
+            height=42,
+            font_size=22,
+            bold=True
+        )
 
-        Clock.schedule_once(lambda dt: self.tablero_widget.dibujar(
-            self.tablero, self.seleccion, self.movimientos_validos))
+        raiz.add_widget(titulo)
+
+        # --------------------------------------------
+        # INFORMACIÓN DE JUGADORES
+        # --------------------------------------------
+
+        jugadores = BoxLayout(
+            size_hint_y=None,
+            height=35,
+            spacing=8
+        )
+
+        jugador_rojo = Label(
+            text="🔴 Tú",
+            font_size=16
+        )
+
+        jugador_negro = Label(
+            text="⚫ IA",
+            font_size=16
+        )
+
+        jugadores.add_widget(
+            jugador_rojo
+        )
+
+        jugadores.add_widget(
+            jugador_negro
+        )
+
+        raiz.add_widget(
+            jugadores
+        )
+
+        # --------------------------------------------
+        # DIFICULTAD
+        # --------------------------------------------
+
+        fila_superior = BoxLayout(
+            size_hint_y=None,
+            height=45,
+            spacing=8
+        )
+
+        fila_superior.add_widget(
+            Label(
+                text="Dificultad:",
+                font_size=16
+            )
+        )
+
+        self.spinner = Spinner(
+            text=self.dificultad_actual,
+            values=list(
+                DIFICULTADES.keys()
+            )
+        )
+
+        self.spinner.bind(
+            text=self.cambiar_dificultad
+        )
+
+        fila_superior.add_widget(
+            self.spinner
+        )
+
+        raiz.add_widget(
+            fila_superior
+        )
+
+        # --------------------------------------------
+        # ESTADO
+        # --------------------------------------------
+
+        self.status = Label(
+            text="Tu turno (rojas)",
+            size_hint_y=None,
+            height=35,
+            font_size=15
+        )
+
+        raiz.add_widget(
+            self.status
+        )
+
+        # --------------------------------------------
+        # TABLERO
+        # --------------------------------------------
+
+        self.tablero_widget = TableroWidget(
+            self
+        )
+
+        raiz.add_widget(
+            self.tablero_widget
+        )
+
+        # --------------------------------------------
+        # BOTÓN REINICIAR
+        # --------------------------------------------
+
+        boton_reiniciar = Button(
+            text="Reiniciar partida",
+            size_hint_y=None,
+            height=48,
+            font_size=16
+        )
+
+        boton_reiniciar.bind(
+            on_release=lambda inst:
+            self.reiniciar()
+        )
+
+        raiz.add_widget(
+            boton_reiniciar
+        )
+
+        # --------------------------------------------
+        # PRIMER DIBUJO
+        # --------------------------------------------
+
+        Clock.schedule_once(
+            lambda dt:
+            self.tablero_widget.dibujar(
+                self.tablero,
+                self.seleccion,
+                self.movimientos_validos
+            ),
+            0
+        )
 
         return raiz
 
-    def cambiar_dificultad(self, spinner, texto):
+    # ========================================================
+    # CAMBIAR DIFICULTAD
+    # ========================================================
+
+    def cambiar_dificultad(
+        self,
+        spinner,
+        texto
+    ):
+
         self.dificultad_actual = texto
 
-    def reiniciar(self):
-        self.tablero = tablero_inicial()
-        self.turno = 'r'
-        self.seleccion = None
-        self.movimientos_validos = generar_movimientos(self.tablero, self.turno)
-        self.status.text = "Tu turno (rojas)"
-        self.tablero_widget.dibujar(self.tablero, self.seleccion, self.movimientos_validos)
+    # ========================================================
+    # REINICIAR
+    # ========================================================
 
-    def al_hacer_clic(self, fila, col):
+    def reiniciar(self):
+
+        self.tablero = tablero_inicial()
+
+        self.turno = 'r'
+
+        self.seleccion = None
+
+        self.movimientos_validos = generar_movimientos(
+            self.tablero,
+            self.turno
+        )
+
+        self.status.text = (
+            "Tu turno (rojas)"
+        )
+
+        self.tablero_widget.dibujar(
+            self.tablero,
+            self.seleccion,
+            self.movimientos_validos
+        )
+
+    # ========================================================
+    # CLIC EN TABLERO
+    # ========================================================
+
+    def al_hacer_clic(
+        self,
+        fila,
+        col
+    ):
+
+        # Si está jugando la IA,
+        # ignorar clics.
         if self.turno != self.jugador_humano:
             return
 
         pieza = self.tablero[fila][col]
 
-        if self.seleccion:
-            mov = next((m for m in self.movimientos_validos
-                        if m[0] == self.seleccion[0] and m[1] == self.seleccion[1]
-                        and m[2] == fila and m[3] == col), None)
-            if mov:
-                self.tablero = aplicar_movimiento(self.tablero, mov)
+        # ----------------------------------------------------
+        # INTENTAR MOVER LA PIEZA SELECCIONADA
+        # ----------------------------------------------------
+
+        if self.seleccion is not None:
+
+            mov = next(
+                (
+                    m
+                    for m in self.movimientos_validos
+                    if (
+                        m[0] == self.seleccion[0]
+                        and
+                        m[1] == self.seleccion[1]
+                        and
+                        m[2] == fila
+                        and
+                        m[3] == col
+                    )
+                ),
+                None
+            )
+
+            if mov is not None:
+
+                # Aplicar movimiento
+                self.tablero = aplicar_movimiento(
+                    self.tablero,
+                    mov
+                )
+
                 self.seleccion = None
-                self.turno = oponente(self.turno)
-                self.tablero_widget.dibujar(self.tablero, self.seleccion, self.movimientos_validos)
+
+                # Cambiar turno
+                self.turno = oponente(
+                    self.turno
+                )
+
+                # IMPORTANTE:
+                # actualizar movimientos inmediatamente
+                self.movimientos_validos = generar_movimientos(
+                    self.tablero,
+                    self.turno
+                )
+
+                self.tablero_widget.dibujar(
+                    self.tablero,
+                    self.seleccion,
+                    self.movimientos_validos
+                )
+
+                # Revisar si terminó
                 if self.revisar_fin():
                     return
-                Clock.schedule_once(lambda dt: self.turno_ia(), 0.4)
+
+                # Turno IA
+                Clock.schedule_once(
+                    lambda dt:
+                    self.turno_ia(),
+                    0.35
+                )
+
                 return
 
-        if pieza != '.' and es_pieza_de(pieza, self.jugador_humano):
-            disponibles = [m for m in self.movimientos_validos if m[0] == fila and m[1] == col]
-            self.seleccion = (fila, col) if disponibles else None
+        # ----------------------------------------------------
+        # SELECCIONAR PIEZA
+        # ----------------------------------------------------
+
+        if (
+            pieza != '.'
+            and
+            es_pieza_de(
+                pieza,
+                self.jugador_humano
+            )
+        ):
+
+            disponibles = [
+                m
+                for m in self.movimientos_validos
+                if (
+                    m[0] == fila
+                    and
+                    m[1] == col
+                )
+            ]
+
+            if disponibles:
+
+                self.seleccion = (
+                    fila,
+                    col
+                )
+
+            else:
+
+                self.seleccion = None
+
         else:
+
             self.seleccion = None
 
-        self.tablero_widget.dibujar(self.tablero, self.seleccion, self.movimientos_validos)
+        self.tablero_widget.dibujar(
+            self.tablero,
+            self.seleccion,
+            self.movimientos_validos
+        )
+
+    # ========================================================
+    # TURNO DE LA IA
+    # ========================================================
 
     def turno_ia(self):
-        movimientos = generar_movimientos(self.tablero, self.jugador_ia)
-        if not movimientos:
-            self.status.text = "¡Ganaste! La IA no tiene movimientos."
+
+        if self.turno != self.jugador_ia:
             return
 
-        self.status.text = "La IA está pensando..."
+        movimientos = generar_movimientos(
+            self.tablero,
+            self.jugador_ia
+        )
 
-        def jugar(dt):
-            profundidad, prob_azar = DIFICULTADES[self.dificultad_actual]
-            mov = elegir_movimiento_ia(self.tablero, self.jugador_ia, profundidad, prob_azar)
-            self.tablero = aplicar_movimiento(self.tablero, mov)
-            self.turno = oponente(self.turno)
-            self.movimientos_validos = generar_movimientos(self.tablero, self.turno)
-            self.tablero_widget.dibujar(self.tablero, self.seleccion, self.movimientos_validos)
-            self.status.text = "Tu turno (rojas)"
+        if not movimientos:
+
             self.revisar_fin()
 
-        Clock.schedule_once(jugar, 0.05)
+            return
+
+        self.status.text = (
+            "La IA está pensando..."
+        )
+
+        # Evita que el jugador pueda seleccionar
+        # mientras la IA está calculando.
+        self.seleccion = None
+
+        self.tablero_widget.dibujar(
+            self.tablero,
+            self.seleccion,
+            self.movimientos_validos
+        )
+
+        def jugar(dt):
+
+            profundidad, prob_azar = (
+                DIFICULTADES[
+                    self.dificultad_actual
+                ]
+            )
+
+            mov = elegir_movimiento_ia(
+                self.tablero,
+                self.jugador_ia,
+                profundidad,
+                prob_azar
+            )
+
+            if mov is None:
+
+                self.revisar_fin()
+
+                return
+
+            self.tablero = aplicar_movimiento(
+                self.tablero,
+                mov
+            )
+
+            # Cambiar turno
+            self.turno = oponente(
+                self.turno
+            )
+
+            # Actualizar movimientos
+            self.movimientos_validos = generar_movimientos(
+                self.tablero,
+                self.turno
+            )
+
+            self.tablero_widget.dibujar(
+                self.tablero,
+                self.seleccion,
+                self.movimientos_validos
+            )
+
+            self.status.text = (
+                "Tu turno (rojas)"
+            )
+
+            self.revisar_fin()
+
+        Clock.schedule_once(
+            jugar,
+            0.05
+        )
+
+    # ========================================================
+    # REVISAR FINAL
+    # ========================================================
 
     def revisar_fin(self):
-        r, n = contar_piezas(self.tablero)
+
+        rojas, negras = contar_piezas(
+            self.tablero
+        )
+
         mensaje = None
-        if r == 0:
-            mensaje = "La IA gana. Te quedaste sin fichas."
-        elif n == 0:
-            mensaje = "¡Ganaste! La IA se quedó sin fichas."
+
+        # --------------------------------------------
+        # SIN FICHAS
+        # --------------------------------------------
+
+        if rojas == 0:
+
+            mensaje = (
+                "La IA gana.\n"
+                "Te quedaste sin fichas."
+            )
+
+        elif negras == 0:
+
+            mensaje = (
+                "¡Ganaste!\n"
+                "La IA se quedó sin fichas."
+            )
+
         else:
-            self.movimientos_validos = generar_movimientos(self.tablero, self.turno)
+
+            # Actualizar movimientos
+            self.movimientos_validos = generar_movimientos(
+                self.tablero,
+                self.turno
+            )
+
+            # ----------------------------------------
+            # SIN MOVIMIENTOS
+            # ----------------------------------------
+
             if not self.movimientos_validos:
+
                 if self.turno == self.jugador_humano:
-                    mensaje = "No tienes movimientos disponibles. Pierdes."
+
+                    mensaje = (
+                        "No tienes movimientos disponibles.\n"
+                        "La IA gana."
+                    )
+
                 else:
-                    mensaje = "¡Ganaste! La IA no tiene movimientos."
+
+                    mensaje = (
+                        "¡Ganaste!\n"
+                        "La IA no tiene movimientos."
+                    )
+
+        # --------------------------------------------
+        # MOSTRAR RESULTADO
+        # --------------------------------------------
 
         if mensaje:
+
             self.status.text = mensaje
-            popup = Popup(title="Fin de la partida",
-                           content=Label(text=mensaje),
-                           size_hint=(0.7, 0.3))
+
+            popup = Popup(
+                title="Fin de la partida",
+                content=Label(
+                    text=mensaje,
+                    halign='center',
+                    valign='middle'
+                ),
+                size_hint=(0.75, 0.30)
+            )
+
             popup.open()
+
             return True
+
         return False
 
 
+# ============================================================
+# INICIAR
+# ============================================================
+
 if __name__ == "__main__":
+
     DamasApp().run()
